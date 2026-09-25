@@ -1,0 +1,61 @@
+{
+  "name": "pigeon-post",
+  "version": "1.0.0",
+  "main": "index.ts",
+  "dependencies": {
+    "@expo/metro-runtime": "~57.0.16",
+    "@react-native-async-storage/async-storage": "2.2.0",
+    "@supabase/supabase-js": "^2.117.1",
+    "expo": "~57.0.24",
+    "expo-constants": "~57.0.19",
+    "expo-crypto": "~57.0.3",
+    "expo-dev-client": "~57.0.19",
+    "expo-status-bar": "~57.0.1",
+    "react": "19.2.3",
+    "react-dom": "19.2.3",
+    "react-native": "0.86.3",
+    "react-native-purchases": "^10.10.2",
+    "react-native-safe-area-context": "~5.7.0",
+    "react-native-svg": "15.15.4",
+    "react-native-url-polyfill": "^4.0.0",
+    "react-native-web": "^0.21.2"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "@types/react": "~19.2.2",
+    "supabase": "2.117.0",
+    "typescript": "~6.0.3"
+  },
+  "scripts": {
+    "start": "expo start --go",
+    "android": "expo start --go --android",
+    "ios": "expo start --go --ios",
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "test": "node --experimental-strip-types --test tests/*.test.mjs",
+    "export": "expo export --platform all",
+    "test:backend": "node --test tests/backend/*.test.mjs",
+    "backend:start": "supabase start",
+    "backend:check": "node scripts/check-backend.mjs",
+    "backend:smoke": "node --env-file-if-exists=.env.test.local scripts/smoke-backend.mjs",
+    "check": "npm run typecheck && npm test && npm run test:backend",
+    "eas-build-post-install": "node scripts/check-backend.mjs --config-only",
+    "native:android": "expo run:android",
+    "native:ios": "expo run:ios",
+    "prenative:android": "node scripts/check-backend.mjs --config-only",
+    "prenative:ios": "node scripts/check-backend.mjs --config-only",
+    "backend:plan": "supabase db push --dry-run",
+    "backend:sql": "node scripts/build-database-setup.mjs",
+    "backend:deploy": "supabase db push",
+    "prestart": "node scripts/check-backend.mjs --config-only",
+    "preweb": "node scripts/check-backend.mjs --config-only",
+    "preios": "node scripts/check-backend.mjs --config-only",
+    "preandroid": "node scripts/check-backend.mjs --config-only",
+    "preexport": "node scripts/check-backend.mjs --config-only",
+    "start:dev": "expo start --dev-client"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.18.0"
+  }
+}

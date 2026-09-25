@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Pigeon Post",
+    "slug": "pigeon-post",
+    "version": "1.0.0",
+    "scheme": "pigeonpost",
+    "orientation": "default",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "bundleIdentifier": "com.romanparwez.pigeonpost",
+      "supportsTablet": true,
+      "requireFullScreen": false
+    },
+    "android": {
+      "package": "com.romanparwez.pigeonpost",
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "./plugins/withAdaptiveAndroid"
+    ]
+  }
+}
