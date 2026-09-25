@@ -93,3 +93,7 @@ Pigeon Plus purchase/restore integration and verified server entitlements are im
 ## Store release and adaptive screens
 
 Follow [PUBLISHING.md](PUBLISHING.md) for EAS signing, production configuration, Play testing and TestFlight/App Review. See [FOLDABLE_TESTING.md](FOLDABLE_TESTING.md) for the adaptive layout changes, verified window sizes and remaining native foldable/iPad checks.
+
+## Vercel web deployment
+
+Use `npm run build` to export the website. The root `vercel.json` publishes `dist` as an Expo single-page app. See [VERCEL.md](VERCEL.md) for dashboard settings, environment variables and troubleshooting a domain that downloads a file instead of opening the app.

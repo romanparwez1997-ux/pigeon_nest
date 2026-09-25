@@ -31,6 +31,8 @@
     "android": "expo start --go --android",
     "ios": "expo start --go --ios",
     "web": "expo start --web",
+    "prebuild": "node scripts/check-backend.mjs --config-only",
+    "build": "expo export --platform web",
     "typecheck": "tsc --noEmit",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "export": "expo export --platform all",
