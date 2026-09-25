@@ -24,6 +24,7 @@ export function CallOverlay({userId,selected,onSelected}:{userId:string;selected
     if(current){setCall(null);setCredentials(null);onSelected(null);}return;
    }
    if(data.status==='accepted'&&Date.now()-lastHeartbeat.current>10000){lastHeartbeat.current=Date.now();void rpc('heartbeat_call',{p_call:data.id}).catch(()=>{});}
+   if(current?.id!==data.id)onSelected(data as Call);
    setCall(data as Call);
   };
   const channel=supabase!.channel(`calls-${userId}`).on('postgres_changes',{event:'*',schema:'public',table:'calls'},()=>void update()).subscribe();
