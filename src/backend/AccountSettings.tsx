@@ -1,3 +1,4 @@
+import { removeDevicePush } from '../communications/notifications';
 import { letterDraftStore } from './useLetterDraft';
 import React, { useEffect, useRef, useState } from 'react';
 import { Pressable, Text, View } from 'react-native';
@@ -83,6 +84,7 @@ export function AccountSettings({ account, userId, onRefresh, onLetter }: { acco
       <Text style={ui.title}>Delete your account?</Text><Text style={ui.body}>This permanently removes your login, passport, letters, shared conversations, reports, and postage points. This cannot be undone.</Text>
       <Field label="Type DELETE to confirm" value={confirmation} onChange={setConfirmation} autoCapitalize="characters" autoCorrect={false} />
       <Action title="Permanently delete my account" disabled={busy || confirmation !== 'DELETE'} onPress={() => run(async () => {
+        await removeDevicePush();
         await deleteAccount(confirmation);
         await letterDraftStore.clear(userId).catch(() => {});
         await AsyncStorage.removeItem(`pigeon-post.live.games.${userId}`).catch(() => {});

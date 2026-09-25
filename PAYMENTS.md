@@ -93,3 +93,7 @@ For iOS, configure App Store Connect products and sandbox testers, then build a 
 ## Rewards already available without billing
 
 One daily claim per account per UTC day: 25% pigeon delivery, 25% postman delivery, 25% 10 points, 25% riddle token. Server-side locks and unique keys prevent re-rolls or duplicate credits. Courier passes cover one matching delivery automatically; failed sends don't spend a pass. A token opens a riddle lasting seven days, with three distinct guesses. A correct answer earns 20 points once. Riddle answers are held in the private database schema.
+
+## Premium voice and video calls
+
+The caller must have a verified active Pigeon Plus membership; a connected recipient may answer for free. Configure LiveKit and native push as described in [COMMUNICATIONS.md](COMMUNICATIONS.md). Calls are foreground-only, require an accepted letter connection, and use the same blocking/age-circle rules. Do not advertise calling as available until LiveKit, the cleanup worker and two-device tests are complete.

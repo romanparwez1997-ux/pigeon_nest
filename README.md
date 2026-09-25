@@ -51,7 +51,7 @@ The rewards screen previews future 10/60-pigeon bundles; no purchases or earned 
 - Complete SMTP/recovery-template setup and verify Auth and two-device Realtime/delivery with real test accounts against the deployed project. Add private avatar storage if required.
 - Exercise the implemented server enforcement of age cohorts, consent, blocks, rate limits, and access control in the hosted environment.
 - Design age assurance and the transition at age 18. If dating is added, keep it opt-in and adult-only.
-- Verify the implemented delivery worker, acceptance transactions, idempotency, and server-owned points under concurrent load. Implement device push notifications.
+- Verify the implemented delivery worker, acceptance transactions, idempotency, and server-owned points under concurrent load. Configure and test native push delivery using [COMMUNICATIONS.md](COMMUNICATIONS.md).
 - Operate the implemented service-only report review/suspension tools and account deletion flow. Finalize privacy settings, retention policies, and operational monitoring.
 - Replace starter app icons; finalize name, branding, delivery timing, rewards, and app-store metadata.
 - Test on physical Android and iOS devices, including screen readers, large text, keyboard behavior, offline recovery, and push permissions.
@@ -97,3 +97,7 @@ Follow [PUBLISHING.md](PUBLISHING.md) for EAS signing, production configuration,
 ## Vercel web deployment
 
 Use `npm run build` to export the website. The root `vercel.json` publishes `dist` as an Expo single-page app. See [VERCEL.md](VERCEL.md) for dashboard settings, environment variables and troubleshooting a domain that downloads a file instead of opening the app.
+
+## Messaging, attachments and calls
+
+[COMMUNICATIONS.md](COMMUNICATIONS.md) documents typing/read receipts, private file sharing, Premium voice/video calls, native notification setup and Android/iOS back navigation, including the remaining provider credentials and native-device tests.

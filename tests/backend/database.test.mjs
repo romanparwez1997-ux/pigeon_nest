@@ -67,6 +67,61 @@ test('PostgreSQL migrations, RPCs, and row-level security', async t => {
     await db.exec(await readFile(new URL('../../supabase/migrations/202609240003_account_tools.sql', import.meta.url), 'utf8'));
 
     await db.exec(await readFile(new URL('../../supabase/migrations/202609250001_rewards_and_premium.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../../supabase/migrations/202609250002_communications.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../../supabase/migrations/202609250004_call_liveness.sql', import.meta.url), 'utf8'));
+    const connect = async () => { const letter=await send(); await arrive(letter); await user(ids.b); const room=(await q('select public.decide_letter($1,true) as id',[letter]))[0].id; await user(ids.a); return room; };
+    await run('typing and read cursors are scoped, monotonic, and cannot bypass blocking', async () => {
+      const room=await connect();
+      await q('select public.set_chat_typing($1,true)',[room]);
+      const message=(await q("select public.send_message($1,'Hello again',$2) as id",[room,randomUUID()]))[0].id;
+      await user(ids.b);await q('select public.mark_chat_read($1,$2)',[room,message]);
+      assert.equal((await q('select * from public.chat_activity where user_id=$1',[ids.a])).length,1);
+      await user(ids.stranger);assert.equal((await q('select * from public.chat_activity')).length,0);
+      await denied('select public.set_chat_typing($1,true)',[room]);
+      await user(ids.a);await q('select public.block_explorer($1,null)',[ids.b]);
+      await denied('select public.mark_chat_read($1,$2)',[room,message]);
+    });
+    await run('only Premium callers can invite; free recipients answer; strangers and blocked calls are rejected', async () => {
+      const room=await connect();const client=randomUUID();
+      await denied("select public.start_call($1,'video',$2)",[room,client],/Plus/);
+      await admin();await q("insert into public.premium_memberships values($1,now()+interval '1 day','monthly',now())",[ids.a]);await user(ids.a);
+      const call=(await q("select (public.start_call($1,'video',$2)).*",[room,client]))[0];
+      assert.equal((await q("select (public.start_call($1,'video',$2)).id",[room,client]))[0].id,call.id);
+      await user(ids.stranger);await denied('select public.answer_call($1,true)',[call.id]);assert.equal((await q('select * from public.calls')).length,0);
+      await user(ids.b);const answered=(await q('select (public.answer_call($1,true)).*',[call.id]))[0];assert.equal(answered.status,'accepted');
+      await q('select public.heartbeat_call($1)',[call.id]);
+      await user(ids.a);await q('select public.heartbeat_call($1)',[call.id]);await q('select public.block_explorer($1,null)',[ids.b]);await admin();await q('select public.communication_maintenance()');
+      assert.equal((await q('select status from public.calls where id=$1',[call.id]))[0].status,'ended');
+    });
+    await run('expired invitations reject answers and abandoned media calls release both participants', async () => {
+      const room=await connect();await admin();await q("insert into public.premium_memberships values($1,now()+interval '1 day','monthly',now())",[ids.a]);await user(ids.a);
+      const first=(await q("select (public.start_call($1,'voice',$2)).id",[room,randomUUID()]))[0].id;
+      await admin();await q("update public.calls set expires_at=now()-interval '1 second' where id=$1",[first]);await user(ids.b);await denied('select public.answer_call($1,true)',[first],/ended/);
+      await user(ids.a);const second=(await q("select (public.start_call($1,'voice',$2)).id",[room,randomUUID()]))[0].id;
+      await user(ids.b);await q('select public.answer_call($1,true)',[second]);
+      await admin();await q("update public.calls set answered_at=now()-interval '1 minute' where id=$1",[second]);await q('select public.communication_maintenance()');
+      assert.equal((await q('select status from public.calls where id=$1',[second]))[0].status,'ended');
+    });
+    await run('attachments require trusted upload, preserve idempotency and become inaccessible after blocking', async () => {
+      const room=await connect(),key=randomUUID(),path=`${ids.a}/${room}/${key}`;
+      const args=[ids.a,room,key,path,'hello.txt','text/plain',20];
+      await denied('select public.publish_attachment($1,$2,$3,$4,$5,$6,$7)',args,/permission/);
+      await admin();const message=(await q('select public.publish_attachment($1,$2,$3,$4,$5,$6,$7) as id',args))[0].id;
+      assert.equal((await q('select public.publish_attachment($1,$2,$3,$4,$5,$6,$7) as id',args))[0].id,message);
+      await user(ids.b);assert.equal((await q('select * from public.chat_attachments')).length,1);
+      await user(ids.stranger);assert.equal((await q('select * from public.chat_attachments')).length,0);
+      await user(ids.b);await q('select public.block_explorer($1,null)',[ids.a]);assert.equal((await q('select * from public.chat_attachments')).length,0);
+      await admin();await q('delete from public.messages where id=$1',[message]);assert.equal((await q('select * from private.storage_cleanup'))[0].path,path);
+    });
+    await run('push tokens and jobs are private; dispatch rechecks account changes and blocks', async () => {
+      const room=await connect();await user(ids.b);await q("select public.register_push_token('ExpoPushToken[test_device]')");
+      await user(ids.a);await q("select public.send_message($1,'Notification test',$2)",[room,randomUUID()]);
+      await denied('select * from private.push_devices',[],/permission/);await denied('select public.claim_push_jobs()',[],/permission/);
+      await admin();assert.equal((await q('select * from public.claim_push_jobs()')).length,1);
+      await user(ids.b);await q('select public.block_explorer($1,null)',[ids.a]);
+      await admin();await q("update private.push_jobs set next_at='epoch'");assert.equal((await q('select * from public.claim_push_jobs()')).length,0);
+      assert.equal((await q('select done from private.push_jobs'))[0].done,true);
+    });
     await run('daily gifts cannot reroll, double credit, or cross account boundaries', async () => {
       const first = (await q('select public.claim_daily_reward() as reward'))[0].reward;
       const account = (await q('select public.my_account() as a'))[0].a;

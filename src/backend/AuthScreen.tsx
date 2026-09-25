@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { PigeonArt } from '../components/Artwork';
+import { removeDevicePush } from '../communications/notifications';
 import { supabase } from './client';
 import { Action, Field, ui } from './ui';
 
@@ -40,6 +41,7 @@ export function AuthScreen({ onRecovery }: { onRecovery: (active: boolean) => vo
       const { error } = await supabase.auth.updateUser({ password });
       if (error) throw error;
       // Revoke other sessions, then require a normal sign-in with the new password.
+      await removeDevicePush();
       const { error: signoutError } = await supabase.auth.signOut();
       if (signoutError) throw signoutError;
       navigate('signin'); setNotice('Password updated. Sign in with your new password.');

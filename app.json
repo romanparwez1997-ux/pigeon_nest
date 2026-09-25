@@ -20,7 +20,7 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": true
     },
     "web": {
       "bundler": "metro",
@@ -28,7 +28,17 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "./plugins/withAdaptiveAndroid"
+      "./plugins/withAdaptiveAndroid",
+      "expo-sharing",
+      "expo-notifications",
+      "@livekit/react-native-expo-plugin",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Allow Pigeon Post to use your camera for video calls you choose to join.",
+          "microphonePermission": "Allow Pigeon Post to use your microphone for calls you choose to join."
+        }
+      ]
     ]
   }
 }

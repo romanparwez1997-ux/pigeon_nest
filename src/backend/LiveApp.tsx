@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
+import { ActivityIndicator, AppState, BackHandler, KeyboardAvoidingView, Modal, Platform, Pressable, RefreshControl, ScrollView, StyleSheet, Text, TextInput, View, useWindowDimensions } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { StatusBar } from 'expo-status-bar';
 import { randomUUID } from 'expo-crypto';
@@ -12,7 +12,7 @@ import { ExploreScreen } from '../screens/ExploreScreen';
 import { GameChoice, GameResult, GamesScreen } from '../screens/GamesScreen';
 import { ageAt, Destination, GameStats, Interest, INTERESTS } from '../domain/model';
 import { backendConfigError, supabase } from './client';
-import { block, report, createProfile, decide, discoveryState, explorerProfiles, LiveMessage, LiveSnapshot, loadMessages, loadSnapshot, postLetter, postMessage } from './api';
+import { block, report, createProfile, decide, discoveryState, explorerProfiles, LiveSnapshot, loadSnapshot, postLetter } from './api';
 
 import { AuthScreen } from './AuthScreen';
 import { AccountSettings } from './AccountSettings';
@@ -20,12 +20,23 @@ import { Action, Field } from './ui';
 import { DailyRewardCard, RewardsPanel } from './RewardsPanel';
 import { PremiumPanel } from './PremiumPanel';
 import { useLetterDraft } from './useLetterDraft';
+import { NavigationContainer, useNavigationContainerRef } from '@react-navigation/native';
+import { createNativeStackNavigator } from '@react-navigation/native-stack';
+import { ChatRoom } from '../communications/ChatRoom';
+import { CallOverlay, callsSupported } from '../communications/CallOverlay';
+import { Call, invoke, startCall } from '../communications/api';
+import { NotificationSettings } from '../communications/NotificationSettings';
+import { listenForNotifications, removeDevicePush } from '../communications/notifications';
+const Stack = createNativeStackNavigator<{ PostOffice: undefined; Conversation: { id: string } }>();
 
 type Page = 'Explore' | 'Mailbox' | 'Chats' | 'Play' | 'Passport';
 const pages: { title: Page; icon: IconName }[] = [{ title: 'Explore', icon: 'compass' }, { title: 'Mailbox', icon: 'mail' }, { title: 'Chats', icon: 'chat' }, { title: 'Play', icon: 'game' }, { title: 'Passport', icon: 'passport' }];
 const blank: LiveSnapshot = { account: null, people: [], letters: [], conversations: [] };
 
 export function LiveApp() {
+  const navigation = useNavigationContainerRef<{ PostOffice: undefined; Conversation: { id: string } }>();
+  const [activeCall, setActiveCall] = useState<Call | null>(null);
+  const notificationRoom = useRef<string | null>(null);
   const { width, height, fontScale } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const rail = width - insets.left - insets.right >= 840 && height - insets.top - insets.bottom >= 500 * fontScale && fontScale < 1.6;
@@ -47,10 +58,6 @@ export function LiveApp() {
   const [modal, setModal] = useState<'compose' | 'letter' | 'translate' | 'report' | 'rewards' | 'premium' | null>(null);
   const [letterId, setLetterId] = useState<string | null>(null);
   const [mailTab, setMailTab] = useState<'received' | 'sent'>('received');
-  const [chatId, setChatId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<LiveMessage[]>([]);
-  const [messageBody, setMessageBody] = useState('');
-  const [olderAvailable, setOlderAvailable] = useState(false);
   const [translation, setTranslation] = useState('');
   const [reportUser, setReportUser] = useState<string | null>(null);
   const [reportReason, setReportReason] = useState('');
@@ -58,7 +65,6 @@ export function LiveApp() {
   const [gameStats, setGameStats] = useState<GameStats>();
   const working = useRef(false);
   const currentUser = useRef<string | null>(null);
-  const currentRoom = useRef<string | null>(null); currentRoom.current = chatId;
   const loadVersion = useRef(0);
   const request = useRef<{ signature: string; id: string } | null>(null);
   const content = useRef<ScrollView>(null);
@@ -79,8 +85,8 @@ export function LiveApp() {
       if (currentUser.current !== (next?.user.id || null)) {
         currentUser.current = next?.user.id || null;
         loadVersion.current++;
-        setData(blank); setLoaded(false); setMessages([]); setChatId(null); setModal(null); setGameStats(undefined);
-        setError(''); setNotice(''); setOlderAvailable(false); setReportUser(null); setReportReason(''); setTranslation(''); setPage('Explore'); setMessageBody(''); setName(''); setBirthday(''); setCountry(''); setInterests([]); request.current = null;
+        setActiveCall(null); setData(blank); setLoaded(false); setModal(null); setGameStats(undefined);
+        setError(''); setNotice(''); setReportUser(null); setReportReason(''); setTranslation(''); setPage('Explore'); setName(''); setBirthday(''); setCountry(''); setInterests([]); request.current = null;
       }
       setSession(next); setAuthReady(true);
     };
@@ -96,16 +102,7 @@ export function LiveApp() {
     const next = await loadSnapshot();
     if (owner !== currentUser.current || version !== loadVersion.current) return;
     setData(next); setLoaded(true);
-    const room = currentRoom.current;
-    if (room) {
-      if (!next.conversations.some(c => c.id === room)) { setChatId(null); setMessages([]); }
-      else {
-        const rows = await loadMessages(room);
-        if (currentRoom.current === room && currentUser.current === owner && version === loadVersion.current) {
-          setMessages(existing => [...existing.filter(m => !rows.some(r => r.id === m.id) && rows.length > 0 && (m.created_at < rows[0].created_at || (m.created_at === rows[0].created_at && m.id < rows[0].id))), ...rows]);
-        }
-      }
-    }
+
   }, []);
 
   useEffect(() => {
@@ -114,7 +111,7 @@ export function LiveApp() {
     update();
     const channel = supabase.channel(`post-office-${userId}`);
     let debounce: ReturnType<typeof setTimeout> | undefined;
-    for (const table of ['letters', 'conversations', 'messages', 'notifications']) {
+    for (const table of ['letters', 'conversations', 'notifications']) {
       channel.on('postgres_changes', { event: '*', schema: 'public', table }, () => { clearTimeout(debounce); debounce = setTimeout(update, 250); });
     }
     channel.subscribe();
@@ -125,13 +122,6 @@ export function LiveApp() {
     return () => { alive = false; clearTimeout(debounce); clearInterval(interval); foreground.remove(); void supabase?.removeChannel(channel); };
   }, [userId, refresh]);
 
-  useEffect(() => {
-    if (!chatId) { setMessages([]); return; }
-    let alive = true;
-    setMessages([]); setMessageBody('');
-    loadMessages(chatId).then(rows => { if (alive) { setMessages(rows); setOlderAvailable(rows.length === 100); } }).catch(e => { if (alive) setError(e.message); });
-    return () => { alive = false; };
-  }, [chatId]);
   useEffect(() => { content.current?.scrollTo({ y: 0, animated: false }); }, [page]);
 
   async function run(work: () => Promise<unknown>, success?: (value: unknown) => void) {
@@ -148,11 +138,35 @@ export function LiveApp() {
   const write = (destination?: Destination, prompt?: string) => { if (destination) setTarget(destination); if (prompt !== undefined) setLetterBody(prompt); setError(''); setModal('compose'); };
   const showTranslation = (text: string) => { setTranslation(text); setError(''); setModal('translate'); };
   const currentLetter = data.letters.find(l => l.id === letterId);
-  const currentChat = data.conversations.find(c => c.id === chatId);
-  const otherId = currentChat ? currentChat.member_a === userId ? currentChat.member_b : currentChat.member_a : null;
   const letters = data.letters.filter(l => mailTab === 'sent' ? l.sender_id === userId : l.recipient_id === userId && l.status === 'arrived' && Date.parse(l.expires_at) > Date.now() && !!l.respond_by && Date.parse(l.respond_by) > Date.now());
   const countryOptions = [...new Set(data.people.map(p => p.country))];
   const targetLabel = target.kind === 'person' ? personName(target.personId) : target.kind === 'country' ? target.country : 'Anywhere';
+
+  function openChat(id: string) {
+    setPage('Chats');
+    if (navigation.isReady()) navigation.navigate('Conversation', { id });
+    else notificationRoom.current = id;
+  }
+  async function beginCall(room: string, kind: Call['kind']) {
+    if (!account?.premium) { setModal('premium'); return; }
+    if (!callsSupported()) { setError('Calls require a development or store build. Expo Go does not include the calling SDK.'); return; }
+    await run(async () => { await invoke('call-session', { action: 'ready' }); const call = await startCall(room, kind, requestId(JSON.stringify(['call', room, kind]))); setActiveCall(call); });
+  }
+  useEffect(() => {
+    if (!userId || !account) return;
+    let disposed = false; let stop = () => {};
+    void listenForNotifications(userId, id => { if (!disposed) openChat(id); }).then(cleanup => { if (disposed) cleanup(); else stop = cleanup; }).catch(() => {});
+    return () => { disposed = true; stop(); };
+  }, [userId, !!account]);
+  useEffect(() => {
+    const back = BackHandler.addEventListener('hardwareBackPress', () => {
+      if (navigation.isReady() && navigation.canGoBack()) return false;
+      if (game && page === 'Play') { setGame(null); return true; }
+      if (page !== 'Explore') { setPage('Explore'); return true; }
+      return false;
+    });
+    return () => back.remove();
+  }, [page, game, navigation]);
 
   const interestChoices = <View style={s.chips}>{INTERESTS.map(i => <Pressable key={i} accessibilityRole="checkbox" accessibilityState={{ checked: interests.includes(i) }} onPress={() => setInterests(a => a.includes(i) ? a.filter(v => v !== i) : [...a, i])} style={[s.chip, interests.includes(i) && s.chipSelected]}><Text style={[s.chipText, interests.includes(i) && { color: '#fff' }]}>{i}</Text></Pressable>)}</View>;
   const profileForm = <View style={s.form}><Text style={s.eyebrow}>YOUR REAL JOURNEY STARTS HERE</Text><Text style={s.title}>Create your passport.</Text><Text style={s.body}>Choose at least three interests. Ages 16–17 and adults have separate friendship circles.</Text><Field label="First name" value={name} onChange={setName} maxLength={30} /><Field label="Date of birth (YYYY-MM-DD)" value={birthday} onChange={setBirthday} maxLength={10} autoCapitalize="none" /><Field label="Country" value={country} onChange={setCountry} placeholder="e.g. India" maxLength={60} /><Text style={s.label}>Your interests</Text>{interestChoices}<Text style={s.small}>Your date of birth is private and cannot be changed in the app.</Text><Action title="Create my passport" disabled={busy} onPress={() => run(async () => { if (ageAt(birthday) === null) throw new Error('Enter a valid date in YYYY-MM-DD format.'); await createProfile(name, birthday, country, interests); })} /></View>;
@@ -162,26 +176,30 @@ export function LiveApp() {
     {!backendConfigError && <>
     {!!error && <View accessibilityRole="alert" style={s.errorBox}><Text style={s.error}>{error}</Text>{userId && <Pressable accessibilityRole="button" onPress={() => run(refresh)}><Text style={s.link}>Retry connection</Text></Pressable>}</View>}
     {!!notice && <Text accessibilityRole="alert" style={s.notice}>{notice}</Text>}
-    {!authReady ? <ActivityIndicator style={{ marginTop: 60 }} color={C.green} /> : !session || recovering ? <AuthScreen onRecovery={setRecovering} /> : !loaded ? <View style={s.form}><ActivityIndicator color={C.green} /><Text style={s.body}>Opening your post office…</Text><Action title="Sign out" secondary disabled={busy} onPress={() => run(async () => { const r = await supabase!.auth.signOut(); if (r.error) throw r.error; })} /></View> : !account ? <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.authContent}>{profileForm}<AccountSettings key={userId!} account={null} userId={userId!} onRefresh={refresh} onLetter={() => {}} /><Action title="Use another account" secondary disabled={busy} onPress={() => run(async () => { const r = await supabase!.auth.signOut(); if (r.error) throw r.error; })} /></ScrollView> : <>
+    {!authReady ? <ActivityIndicator style={{ marginTop: 60 }} color={C.green} /> : !session || recovering ? <AuthScreen onRecovery={setRecovering} /> : !loaded ? <View style={s.form}><ActivityIndicator color={C.green} /><Text style={s.body}>Opening your post office…</Text><Action title="Sign out" secondary disabled={busy} onPress={() => run(async () => { await removeDevicePush(); const r = await supabase!.auth.signOut(); if (r.error) throw r.error; })} /></View> : !account ? <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={s.authContent}>{profileForm}<AccountSettings key={userId!} account={null} userId={userId!} onRefresh={refresh} onLetter={() => {}} /><Action title="Use another account" secondary disabled={busy} onPress={() => run(async () => { await removeDevicePush(); const r = await supabase!.auth.signOut(); if (r.error) throw r.error; })} /></ScrollView> : <>
+    <NavigationContainer ref={navigation} onReady={() => { if (notificationRoom.current) { openChat(notificationRoom.current); notificationRoom.current = null; } }}><Stack.Navigator screenOptions={{ headerShown: false, gestureEnabled: true, contentStyle: { backgroundColor: C.bg } }}><Stack.Screen name="PostOffice">{() => <>
     {!account.profile.active && <Text style={s.errorBox}>This account is inactive. Contact support before starting a new conversation.</Text>}
     <View style={[s.shell, rail && s.shellWide]}><KeyboardAvoidingView style={{ flex: 1, minWidth: 0, overflow: 'hidden' }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><ScrollView ref={content} style={{ width: '100%' }} keyboardShouldPersistTaps="handled" refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); refresh().catch(e => setError(e.message)).finally(() => setRefreshing(false)); }} />} contentContainerStyle={[s.content, { padding, maxWidth: page === 'Chats' ? 780 : 1000 }]}>
       {page === 'Explore' && <ExploreScreen rewards={<DailyRewardCard account={account} onOpen={() => setModal('rewards')} />} onPremium={() => setModal('premium')} state={discoveryState(data)} discoveryPeople={explorerProfiles(data.people)} onWrite={write} onPlay={choice => { setGame(choice); setPage('Play'); }} onTranslate={() => showTranslation('')} onMailbox={() => setPage('Mailbox')} onLetter={id => { setLetterId(id); setModal('letter'); }} onPassport={() => setPage('Passport')} />}
       {page === 'Mailbox' && <View style={{ gap: 20 }}><Text style={s.eyebrow}>THE REAL PIGEON EXPRESS</Text><Text style={s.title}>Your mailbox.</Text><View style={s.row}><Action title="Received" secondary={mailTab !== 'received'} onPress={() => setMailTab('received')} /><Action title="Sent" secondary={mailTab !== 'sent'} onPress={() => setMailTab('sent')} /><Pressable accessibilityRole="button" onPress={() => write()} style={{ padding: 12 }}><Icon name="send" /></Pressable></View><Text style={s.body}>Pigeons travel for 15 minutes. Postmen take an hour. You have 24 hours to keep an arriving letter.</Text>{letters.map(l => <Pressable key={l.id} accessibilityRole="button" onPress={() => { setLetterId(l.id); setModal('letter'); }} style={s.card}><View style={s.row}><Icon name={l.courier === 'pigeon' ? 'bird' : 'postman'} /><Text style={s.person}>{l.sender_id === userId ? 'To' : 'From'} {personName(l.sender_id === userId ? l.recipient_id : l.sender_id)}</Text><Text style={s.small}>{l.status}</Text></View><Text style={s.body} numberOfLines={2}>{l.body}</Text><Text style={s.small}>{l.status === 'traveling' ? `Expected ${new Date(l.arrives_at).toLocaleString()}` : new Date(l.sent_at).toLocaleString()}</Text></Pressable>)}{!letters.length && <View style={s.card}><Text style={s.body}>No letters here yet. A small hello is a good place to start.</Text><Action title="Write a letter" onPress={() => write()} /></View>}</View>}
-      {page === 'Chats' && <View style={{ gap: 17 }}>{currentChat && otherId ? <><View style={s.row}><Pressable accessibilityRole="button" accessibilityLabel="Back to chats" onPress={() => setChatId(null)} style={{ padding: 10 }}><Icon name="back" /></Pressable><Text style={[s.title, { flex: 1 }]}>{personName(otherId)}</Text><Pressable accessibilityRole="button" accessibilityLabel="Report or block explorer" onPress={() => { setReportUser(otherId); setReportReason(''); setModal('report'); }} style={{ padding: 10 }}><Icon name="flag" /></Pressable></View><Text style={s.small}>Connected through a letter. New messages update automatically.</Text>{olderAvailable && <Action title="Load earlier messages" secondary disabled={busy} onPress={() => run(async () => { const rows = await loadMessages(chatId!, messages[0]); setMessages(m => [...rows.filter(r => !m.some(x => x.id === r.id)), ...m]); setOlderAvailable(rows.length === 100); })} />}{messages.map(m => <View key={m.id} style={[s.bubble, m.sender_id === userId ? s.mine : s.theirs]}><Text style={[s.message, m.sender_id === userId && { color: '#fff' }]}>{m.body}</Text><Pressable accessibilityRole="button" onPress={() => showTranslation(m.body)}><Text style={[s.small, { color: m.sender_id === userId ? '#CBDAC0' : C.green }]}>Translate · {new Date(m.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</Text></Pressable></View>)}{!messages.length && <Text style={s.body}>Loading your conversation…</Text>}</> : <><Text style={s.title}>Your conversations.</Text><Text style={s.body}>Keep a letter to open a chat. Choosing an explorer alone never opens one.</Text>{data.conversations.map(c => { const id = c.member_a === userId ? c.member_b : c.member_a; return <Pressable accessibilityRole="button" key={c.id} style={s.card} onPress={() => setChatId(c.id)}><View style={s.row}><Icon name="chat" /><Text style={s.person}>{personName(id)}</Text><Icon name="chevron" size={17} /></View></Pressable>; })}{!data.conversations.length && <Action title="Visit your mailbox" onPress={() => setPage('Mailbox')} />}</>}</View>}
+      {page === 'Chats' && <View style={{ gap: 17 }}><Text style={s.title}>Your conversations.</Text><Text style={s.body}>Keep a letter to open a chat.</Text>{data.conversations.map(c => { const id = c.member_a === userId ? c.member_b : c.member_a; return <Pressable accessibilityRole="button" key={c.id} style={s.card} onPress={() => openChat(c.id)}><View style={s.row}><Icon name="chat" /><Text style={s.person}>{personName(id)}</Text><Icon name="chevron" size={17} /></View></Pressable>; })}{!data.conversations.length && <Action title="Visit your mailbox" onPress={() => setPage('Mailbox')} />}</View>}
+
       {page === 'Play' && <GamesScreen selected={game} onSelect={setGame} stats={gameStats} onRecord={(result: GameResult) => { const old = gameStats || { rounds: 0, ticWins: 0 }; const next = { ...old, rounds: old.rounds + 1, ticWins: old.ticWins + (result.kind === 'tic' && result.won ? 1 : 0), memoryBest: result.kind === 'memory' ? Math.min(old.memoryBest ?? Infinity, result.moves) : old.memoryBest }; setGameStats(next); AsyncStorage.setItem(`pigeon-post.live.games.${userId}`, JSON.stringify(next)).catch(() => setNotice('This game score could not be saved on this device.')); }} />}
-      {page === 'Passport' && <View style={{ gap: 20 }}><Text style={s.eyebrow}>YOUR EXPLORER PASSPORT</Text><Text style={s.title}>{account.profile.name}</Text><View style={s.passport}><Icon name="globe" color="#DFE9D5" size={35} /><Text style={s.passportName}>{account.profile.country}</Text><Text style={{ color: '#CFDCC5', lineHeight: 22 }}>{(ageAt(account.birthday) ?? 0) < 18 ? '16–17 friendship circle' : '18+ friendship circle'} · {account.points} postage points</Text><Text style={{ color: '#CFDCC5', lineHeight: 22 }}>{account.profile.interests.join(' · ')}</Text></View><Text style={s.body}>Your letters and conversations are stored in your account. Demo profiles and messages are kept separate and are never uploaded.</Text><Action title={account.premium ? "Manage Pigeon Plus" : "Discover Pigeon Plus"} secondary onPress={() => setModal('premium')} /><Action title="Daily gifts & postage pouch" secondary onPress={() => setModal('rewards')} /><AccountSettings key={userId!} account={account} userId={userId!} onRefresh={refresh} onLetter={id => { setLetterId(id); setModal('letter'); }} /><Action title="Refresh account" secondary disabled={busy} onPress={() => run(refresh)} /><Action title="Sign out" secondary disabled={busy} onPress={() => run(async () => { const r = await supabase!.auth.signOut(); if (r.error) throw r.error; })} /></View>}
-    </ScrollView>{page === 'Chats' && currentChat && <View style={s.composer}><TextInput accessibilityLabel="Message" value={messageBody} onChangeText={setMessageBody} placeholder="Send a little hello…" placeholderTextColor={C.muted} style={[s.input, { flex: 1, maxHeight: 110 }]} multiline maxLength={2000} /><Action title="Send" disabled={busy || !messageBody.trim()} onPress={() => run(() => postMessage(currentChat.id, messageBody, requestId(JSON.stringify(['message', currentChat.id, messageBody]))), () => setMessageBody(''))} /></View>}</KeyboardAvoidingView>
+      {page === 'Passport' && <View style={{ gap: 20 }}><Text style={s.eyebrow}>YOUR EXPLORER PASSPORT</Text><Text style={s.title}>{account.profile.name}</Text><View style={s.passport}><Icon name="globe" color="#DFE9D5" size={35} /><Text style={s.passportName}>{account.profile.country}</Text><Text style={{ color: '#CFDCC5', lineHeight: 22 }}>{(ageAt(account.birthday) ?? 0) < 18 ? '16–17 friendship circle' : '18+ friendship circle'} · {account.points} postage points</Text><Text style={{ color: '#CFDCC5', lineHeight: 22 }}>{account.profile.interests.join(' · ')}</Text></View><Text style={s.body}>Your letters and conversations are stored in your account. Demo profiles and messages are kept separate and are never uploaded.</Text><Action title={account.premium ? "Manage Pigeon Plus" : "Discover Pigeon Plus"} secondary onPress={() => setModal('premium')} /><Action title="Daily gifts & postage pouch" secondary onPress={() => setModal('rewards')} /><NotificationSettings userId={userId!} /><AccountSettings key={userId!} account={account} userId={userId!} onRefresh={refresh} onLetter={id => { setLetterId(id); setModal('letter'); }} /><Action title="Refresh account" secondary disabled={busy} onPress={() => run(refresh)} /><Action title="Sign out" secondary disabled={busy} onPress={() => run(async () => { await removeDevicePush(); const r = await supabase!.auth.signOut(); if (r.error) throw r.error; })} /></View>}
+    </ScrollView></KeyboardAvoidingView>
     <View style={[s.nav, { width: width - insets.left - insets.right }, rail && s.rail]}>{pages.map(p => <Pressable key={p.title} accessibilityRole="tab" accessibilityState={{ selected: page === p.title }} onPress={() => { setPage(p.title); setError(''); }} style={[s.navItem, rail && s.railItem, page === p.title && rail && s.selectedNav]}><Icon name={p.icon} color={page === p.title ? C.green : C.muted} /><Text style={[s.navText, page === p.title && { fontWeight: '700', color: C.green }]}>{p.title}</Text></Pressable>)}</View></View>
+    </>}</Stack.Screen><Stack.Screen name="Conversation">{({ route, navigation: nav }) => { const c = data.conversations.find(c => c.id === route.params.id); const peer = c ? c.member_a === userId ? c.member_b : c.member_a : null; return peer ? <ChatRoom key={route.params.id} conversationId={route.params.id} userId={userId!} name={personName(peer)} premium={account.premium} readingEnabled={!modal && !activeCall} onBack={() => nav.goBack()} onReport={() => { setReportUser(peer); setReportReason(''); setModal('report'); }} onTranslate={showTranslation} onCall={kind => void beginCall(route.params.id, kind)} /> : <View style={s.form}><Text style={s.body}>This conversation is no longer available.</Text><Action title="Back to chats" onPress={() => nav.goBack()} /></View>; }}</Stack.Screen></Stack.Navigator></NavigationContainer>
+    <CallOverlay key={userId!} userId={userId!} selected={activeCall} onSelected={setActiveCall} />
     </>}
     </>}
     <Modal supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']} visible={modal !== null} transparent animationType="fade" onRequestClose={() => { if (!busy) setModal(null); }}><KeyboardAvoidingView style={[s.shade, { paddingTop: Math.max(12, insets.top), paddingBottom: Math.max(12, insets.bottom), paddingLeft: Math.max(12, insets.left), paddingRight: Math.max(12, insets.right) }]} behavior={Platform.OS === 'ios' ? 'padding' : undefined}><View style={s.modal}><View style={s.modalTop}><Text style={[s.eyebrow, { flex: 1 }]}>PIGEON POST · YOUR ACCOUNT</Text><Pressable accessibilityRole="button" accessibilityLabel="Close dialog" disabled={busy} onPress={() => setModal(null)} style={{ padding: 12 }}><Icon name="close" /></Pressable></View><ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 24, paddingTop: 0, gap: 17 }}>
       {modal === 'compose' && <><Text style={s.title}>A hello to {targetLabel}.</Text>{!savedDraft.ready && <ActivityIndicator color={C.green} />}{!!savedDraft.error && <Text accessibilityRole="alert" style={s.error}>{savedDraft.error}</Text>}<View style={s.chips}>{(['anywhere', 'country', 'person'] as const).map(kind => <Pressable accessibilityRole="radio" accessibilityState={{ checked: target.kind === kind }} key={kind} onPress={() => setTarget(kind === 'anywhere' ? { kind } : kind === 'country' ? { kind, country: countryOptions[0] || '' } : { kind, personId: data.people[0]?.id || '' })} style={[s.chip, target.kind === kind && s.chipSelected]}><Text style={[s.chipText, target.kind === kind && { color: '#fff' }]}>{kind === 'anywhere' ? 'Anywhere' : kind === 'country' ? 'A country' : 'An explorer'}</Text></Pressable>)}</View>{target.kind === 'country' && <Field label="Destination country" value={target.country} onChange={v => setTarget({ kind: 'country', country: v })} placeholder="e.g. India" maxLength={60} />}{target.kind === 'person' && <View style={s.chips}>{data.people.map(p => <Pressable accessibilityRole="radio" accessibilityState={{ checked: target.personId === p.id }} key={p.id} onPress={() => setTarget({ kind: 'person', personId: p.id })} style={[s.chip, target.personId === p.id && s.chipSelected]}><Text style={[s.chipText, target.personId === p.id && { color: '#fff' }]}>{p.name} · {p.country}</Text></Pressable>)}</View>}<Text style={s.small}>{target.kind === 'person' ? 'Only this person receives the letter. If declined, its journey ends.' : 'Letters only travel within the selected destination and your friendship circle.'}</Text><View style={s.row}><Action title="Pigeon · 15 min" secondary={courier !== 'pigeon'} onPress={() => setCourier('pigeon')} /><Action title="Postman · 1 hour" secondary={courier !== 'postman'} onPress={() => setCourier('postman')} /></View><Field label="Your letter" value={letterBody} onChange={setLetterBody} editable={savedDraft.ready} multiline maxLength={800} textAlignVertical="top" style={[s.input, { minHeight: 160 }]} /><Text style={s.small}>{letterBody.length}/800 characters · {account?.rewards?.[courier] ? '1 free delivery · no points needed' : '10 postage points'}</Text><Action title={busy ? 'Sending…' : 'Send this hello'} disabled={busy || !savedDraft.ready || letterBody.trim().length < 20} onPress={() => run(() => postLetter(letterBody, courier, target, requestId(JSON.stringify(['letter', letterBody, courier, target]))), () => { setLetterBody(''); setModal(null); setMailTab('sent'); setPage('Mailbox'); setNotice('Your courier is on its way. Delivery continues even when you close the app.'); })} /></>}
-      {modal === 'letter' && currentLetter && <><Text style={s.title}>{currentLetter.sender_id === userId ? 'Your travelling hello.' : `A hello from ${personName(currentLetter.sender_id)}.`}</Text><View style={s.paper}><Text style={s.letterText}>{currentLetter.body}</Text></View><Text style={s.body}>{currentLetter.status} · {currentLetter.courier} · stop {currentLetter.attempt_count}</Text><Text style={s.small}>{currentLetter.status === 'traveling' ? `Expected arrival: ${new Date(currentLetter.arrives_at).toLocaleString()}` : currentLetter.respond_by && currentLetter.status === 'arrived' ? `Reply by: ${new Date(currentLetter.respond_by).toLocaleString()}` : ''}</Text><Action title="Translate this letter" secondary onPress={() => showTranslation(currentLetter.body)} />{currentLetter.recipient_id === userId && currentLetter.status === 'arrived' && <><Action title="Keep letter & say hello" disabled={busy} onPress={() => run(() => decide(currentLetter.id, true), room => { setChatId(room as string); setPage('Chats'); setModal(null); })} /><Action title="Let it travel on" secondary disabled={busy} onPress={() => run(() => decide(currentLetter.id, false), () => setModal(null))} /><Action title="Report or block" secondary disabled={busy} onPress={() => { setReportUser(currentLetter.sender_id); setReportReason(''); setModal('report'); }} /></>}</>}
+      {modal === 'letter' && currentLetter && <><Text style={s.title}>{currentLetter.sender_id === userId ? 'Your travelling hello.' : `A hello from ${personName(currentLetter.sender_id)}.`}</Text><View style={s.paper}><Text style={s.letterText}>{currentLetter.body}</Text></View><Text style={s.body}>{currentLetter.status} · {currentLetter.courier} · stop {currentLetter.attempt_count}</Text><Text style={s.small}>{currentLetter.status === 'traveling' ? `Expected arrival: ${new Date(currentLetter.arrives_at).toLocaleString()}` : currentLetter.respond_by && currentLetter.status === 'arrived' ? `Reply by: ${new Date(currentLetter.respond_by).toLocaleString()}` : ''}</Text><Action title="Translate this letter" secondary onPress={() => showTranslation(currentLetter.body)} />{currentLetter.recipient_id === userId && currentLetter.status === 'arrived' && <><Action title="Keep letter & say hello" disabled={busy} onPress={() => run(() => decide(currentLetter.id, true), room => { openChat(room as string); setPage('Chats'); setModal(null); })} /><Action title="Let it travel on" secondary disabled={busy} onPress={() => run(() => decide(currentLetter.id, false), () => setModal(null))} /><Action title="Report or block" secondary disabled={busy} onPress={() => { setReportUser(currentLetter.sender_id); setReportReason(''); setModal('report'); }} /></>}</>}
       {modal === 'letter' && !currentLetter && <Text style={s.body}>This letter is no longer available.</Text>}
       {modal === 'rewards' && account && <RewardsPanel key={userId!} account={account} onRefresh={refresh} />}
       {modal === 'premium' && account && <PremiumPanel key={userId!} account={account} onRefresh={refresh} />}
       {modal === 'translate' && <TranslationPanel initialText={translation} />}
-      {modal === 'report' && reportUser && <><Text style={s.title}>Your comfort comes first.</Text><Text style={s.body}>Blocking removes this explorer from discovery and closes your conversation on both sides. After unblocking, a new letter must be accepted to chat again.</Text><Field label="Report reason (optional for blocking)" value={reportReason} onChange={setReportReason} maxLength={1000} multiline /><Action title="Submit report only" secondary disabled={busy || reportReason.trim().length < 3} onPress={() => run(() => report(reportUser, reportReason), () => { setModal(null); setNotice('Your report has been saved for review.'); })} /><Action title="Report & block" disabled={busy || reportReason.trim().length < 3} onPress={() => run(() => block(reportUser, reportReason), () => { setModal(null); setChatId(null); setMessages([]); setNotice('Explorer blocked. Your report has been saved for review.'); })} /><Action title="Block without reporting" secondary disabled={busy} onPress={() => run(() => block(reportUser, null), () => { setModal(null); setChatId(null); setMessages([]); setNotice('Explorer blocked.'); })} /></>}
+      {modal === 'report' && reportUser && <><Text style={s.title}>Your comfort comes first.</Text><Text style={s.body}>Blocking removes this explorer from discovery and closes your conversation on both sides. After unblocking, a new letter must be accepted to chat again.</Text><Field label="Report reason (optional for blocking)" value={reportReason} onChange={setReportReason} maxLength={1000} multiline /><Action title="Submit report only" secondary disabled={busy || reportReason.trim().length < 3} onPress={() => run(() => report(reportUser, reportReason), () => { setModal(null); setNotice('Your report has been saved for review.'); })} /><Action title="Report & block" disabled={busy || reportReason.trim().length < 3} onPress={() => run(() => block(reportUser, reportReason), () => { setModal(null); setNotice('Explorer blocked. Your report has been saved for review.'); })} /><Action title="Block without reporting" secondary disabled={busy} onPress={() => run(() => block(reportUser, null), () => { setModal(null); setNotice('Explorer blocked.'); })} /></>}
       {!!error && <Text accessibilityRole="alert" style={s.errorBox}>{error}</Text>}
     </ScrollView></View></KeyboardAvoidingView></Modal>
   </SafeAreaView>;

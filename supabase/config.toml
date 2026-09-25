@@ -424,3 +424,12 @@ verify_jwt = false
 
 [functions.revenuecat-webhook]
 verify_jwt = false
+
+[functions.chat-upload]
+verify_jwt = false
+
+[functions.call-session]
+verify_jwt = false
+
+[functions.communication-worker]
+verify_jwt = false
