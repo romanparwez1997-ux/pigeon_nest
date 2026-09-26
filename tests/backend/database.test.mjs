@@ -69,7 +69,61 @@ test('PostgreSQL migrations, RPCs, and row-level security', async t => {
     await db.exec(await readFile(new URL('../../supabase/migrations/202609250001_rewards_and_premium.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../../supabase/migrations/202609250002_communications.sql', import.meta.url), 'utf8'));
     await db.exec(await readFile(new URL('../../supabase/migrations/202609250004_call_liveness.sql', import.meta.url), 'utf8'));
+    await db.exec(await readFile(new URL('../../supabase/migrations/202609260001_complimentary_plus.sql', import.meta.url), 'utf8'));
+    await db.exec('create publication supabase_realtime');
+    await db.exec(await readFile(new URL('../../supabase/migrations/202609260002_receipts_presence.sql', import.meta.url), 'utf8'));
     const connect = async () => { const letter=await send(); await arrive(letter); await user(ids.b); const room=(await q('select public.decide_letter($1,true) as id',[letter]))[0].id; await user(ids.a); return room; };
+    await run('delivery and reads require the actual recipient, preserve first acknowledgement and respect blocks', async () => {
+      const room=await connect();
+      const one=(await q("select public.send_message($1,'one',$2) as id",[room,randomUUID()]))[0].id;
+      const two=(await q("select public.send_message($1,'two',$2) as id",[room,randomUUID()]))[0].id;
+      await denied('select public.acknowledge_messages($1,true)',[[one]]);
+      await user(ids.stranger);await denied('select public.acknowledge_messages($1,false)',[[one]]);
+      assert.equal((await q('select * from public.pending_message_deliveries()')).length,0);
+      await user(ids.b);assert.equal((await q('select * from public.pending_message_deliveries()')).length,3); // includes the accepted letter
+      await q('select public.acknowledge_messages($1,false)',[[one,two]]);
+      assert.equal((await q('select * from public.pending_message_deliveries()')).length,1);
+      await q('select public.acknowledge_messages($1,true)',[[one]]);
+      await q('select public.acknowledge_messages($1,false)',[[one]]);
+      const rows=await q('select message_id,read_at from public.message_receipts order by message_id');
+      assert.ok(rows.find(r=>r.message_id===one).read_at);
+      assert.equal(rows.find(r=>r.message_id===two).read_at,null);
+      await denied('select public.acknowledge_messages($1,true)',[[randomUUID()]]);
+      await denied('select public.acknowledge_messages($1,true)',[Array(101).fill(one)],/100/);
+      await denied('update public.message_receipts set read_at=now()',[],/permission/);
+      await user(ids.a);assert.equal((await q('select * from public.message_receipts')).length,2);
+      await q('select public.block_explorer($1,null)',[ids.b]);
+      assert.equal((await q('select * from public.message_receipts')).length,0);
+      await user(ids.b);await denied('select public.acknowledge_messages($1,true)',[[two]]);
+    });
+    await run('presence is restricted to connected peers, expires and handles multiple devices independently', async () => {
+      const room=await connect(),first=randomUUID(),second=randomUUID();
+      await q('select public.update_presence($1,true)',[first]);
+      await q('select public.update_presence($1,true)',[second]);
+      await q('select public.update_presence($1,false)',[first]);
+      await user(ids.b);
+      assert.equal((await q('select public.conversation_presence($1) as p',[room]))[0].p.online,true);
+      await denied('select public.update_presence($1,false)',[second],/Session/);
+      await denied('select * from private.presence_sessions',[],/permission/);
+      await user(ids.stranger);await denied('select public.conversation_presence($1)',[room]);
+      await admin();await q("update private.presence_sessions set online_until=now()-interval '1 second'");
+      await user(ids.b);assert.equal((await q('select public.conversation_presence($1) as p',[room]))[0].p.online,false);
+      await q('select public.block_explorer($1,null)',[ids.a]);
+      await denied('select public.conversation_presence($1)',[room]);
+      await user(ids.a);await denied('select public.conversation_presence($1)',[room]);
+    });
+    await run('complimentary lifetime access survives store sync without minting paid-period points', async () => {
+      await admin();
+      await q("select public.apply_premium_status($1,'9999-06-01T00:00:00Z',null,'complimentary_lifetime')",[ids.a]);
+      await q("select public.apply_premium_status($1,null,null,'')",[ids.a]);
+      await q("select public.apply_premium_status($1,now()+interval '1 month',now(),'monthly')",[ids.a]);
+      await user(ids.a);
+      const account=(await q('select public.my_account() as a'))[0].a;
+      assert.equal(account.premium,true);
+      assert.match(account.premium_expires_at,/^9999-/);
+      assert.equal(account.points,120);
+      await denied("update public.premium_memberships set product_id='complimentary_lifetime' where user_id=$1",[ids.a],/permission/);
+    });
     await run('typing and read cursors are scoped, monotonic, and cannot bypass blocking', async () => {
       const room=await connect();
       await q('select public.set_chat_typing($1,true)',[room]);

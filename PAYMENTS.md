@@ -97,3 +97,8 @@ One daily claim per account per UTC day: 25% pigeon delivery, 25% postman delive
 ## Premium voice and video calls
 
 The caller must have a verified active Pigeon Plus membership; a connected recipient may answer for free. Configure LiveKit and native push as described in [COMMUNICATIONS.md](COMMUNICATIONS.md). Calls are foreground-only, require an accepted letter connection, and use the same blocking/age-circle rules. Do not advertise calling as available until LiveKit, the cleanup worker and two-device tests are complete.
+## Complimentary lifetime memberships
+
+Administrators can grant complimentary Plus through `public.apply_premium_status` with product ID `complimentary_lifetime`, expiry `9999-06-01T00:00:00Z`, and a null paid-period start. The far-future date represents lifetime access and remains compatible with the existing mobile date handling. Existing APKs may display the year 9999 as the expiry.
+
+The lifetime protection migration prevents store restores/webhooks from replacing these grants. Revocation requires an explicit administrator database change. Complimentary grants do not create charges or paid-period postage credits. Keep recipient details out of migrations and source control.

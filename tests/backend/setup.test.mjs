@@ -37,11 +37,11 @@ test('SQL Editor setup installs schema/history atomically and refuses to overwri
   try {
     await db.exec(sql);
     assert.equal((await db.query('select public.backend_status() as s')).rows[0].s.schema_version, 2);
-    assert.deepEqual((await db.query('select version from supabase_migrations.schema_migrations order by version')).rows.map(r => r.version), ['202609240001', '202609240002', '202609240003', '202609250001', '202609250002', '202609250003', '202609250004']);
-    assert.equal((await db.query("select count(*)::int as n from pg_publication_tables where pubname='supabase_realtime'")).rows[0].n, 7);
+    assert.deepEqual((await db.query('select version from supabase_migrations.schema_migrations order by version')).rows.map(r => r.version), ['202609240001', '202609240002', '202609240003', '202609250001', '202609250002', '202609250003', '202609250004', '202609260001', '202609260002']);
+    assert.equal((await db.query("select count(*)::int as n from pg_publication_tables where pubname='supabase_realtime'")).rows[0].n, 8);
     await assert.rejects(() => db.exec(sql), /already has application tables/);
     await db.exec('rollback');
-    assert.equal((await db.query('select count(*)::int as n from supabase_migrations.schema_migrations')).rows[0].n, 7);
+    assert.equal((await db.query('select count(*)::int as n from supabase_migrations.schema_migrations')).rows[0].n, 9);
   } finally { await db.close(); }
 });
 

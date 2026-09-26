@@ -36,7 +36,7 @@ export function CallOverlay({userId,selected,onSelected}:{userId:string;selected
   if(call?.status==='accepted'&&callsSupported())void invoke<{url:string;token:string}>('call-session',{action:'token',callId:call.id}).then(v=>{if(alive)setCredentials(v);}).catch(e=>{if(alive)setError(e.message);});
   return()=>{alive=false;};
  },[call?.id,call?.status]);
- async function finish(){if(!active.current||ending.current)return;ending.current=true;try{await endCall(active.current.id);setCredentials(null);setCall(null);onSelected(null);}catch(e){setError(e instanceof Error?e.message:'Could not end call.');}finally{ending.current=false;}}
+ async function finish(){if(!active.current||ending.current)return;ending.current=true;try{if(active.current.status==='ringing'&&active.current.callee_id===userId)await answerCall(active.current.id,false);else await endCall(active.current.id);setCredentials(null);setCall(null);onSelected(null);}catch(e){setError(e instanceof Error?e.message:'Could not end call.');}finally{ending.current=false;}}
  // This release intentionally ends calls on backgrounding; no hidden microphone,
  // unconfigured CallKit or unreliable background service is implied.
  useEffect(()=>{const sub=AppState.addEventListener('change',state=>{if(state==='background'&&active.current)void finish();});const hidden=()=>{if(document.visibilityState==='hidden'&&active.current)void finish();};if(Platform.OS==='web')document.addEventListener('visibilitychange',hidden);return()=>{sub.remove();if(Platform.OS==='web')document.removeEventListener('visibilitychange',hidden);};},[]);

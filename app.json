@@ -2,7 +2,7 @@
   "expo": {
     "name": "Pigeon Post",
     "slug": "pigeon-post",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "scheme": "pigeonpost",
     "orientation": "default",
     "icon": "./assets/icon.png",
@@ -20,7 +20,8 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": true
+      "predictiveBackGestureEnabled": true,
+      "versionCode": 2
     },
     "web": {
       "bundler": "metro",
